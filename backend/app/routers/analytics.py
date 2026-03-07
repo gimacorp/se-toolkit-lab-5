@@ -11,6 +11,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.database import get_session
 from app.models.interaction import InteractionLog
 from app.models.item import ItemRecord as Item
+from app.models.learner import Learner
 
 router = APIRouter()
 
@@ -88,14 +89,13 @@ async def get_pass_rates(
         
         pass_rate = (passed / total * 100) if total > 0 else 0.0
         
-        # Считаем avg_score
         scored_interactions = [i for i in interactions if i.score is not None]
         avg_score = sum(i.score for i in scored_interactions) / len(scored_interactions) if scored_interactions else 0.0
         
         result.append({
             "task": task.title,
-            "pass_rate": round(pass_rate, 1),
-            "avg_score": round(avg_score, 1)
+            "avg_score": round(avg_score, 1),
+            "attempts": total
         })
     
     return result
@@ -126,18 +126,19 @@ async def get_timeline(
         select(InteractionLog).where(InteractionLog.item_id.in_(task_ids))
     )).all()
     
-    timeline = defaultdict(lambda: {"total": 0, "passed": 0, "submissions": 0})
+    timeline = defaultdict(lambda: {"submissions": 0, "passed": 0})
     for inter in interactions:
         date_str = inter.created_at.strftime("%Y-%m-%d")
         timeline[date_str]["submissions"] += 1
-        timeline[date_str]["total"] += 1
         if inter.score is not None and inter.score >= 75:
             timeline[date_str]["passed"] += 1
     
     result = []
     for date_str in sorted(timeline.keys()):
         data = timeline[date_str]
-        pass_rate = (data["passed"] / data["total"] * 100) if data["total"] > 0 else 0.0
+        total = data["submissions"]
+        passed = data["passed"]
+        pass_rate = (passed / total * 100) if total > 0 else 0.0
         result.append({
             "date": date_str,
             "submissions": data["submissions"],
@@ -169,29 +170,31 @@ async def get_groups(
     )).all()
     task_ids = [t.id for t in tasks]
     
-    interactions = (await session.exec(
-        select(InteractionLog).where(InteractionLog.item_id.in_(task_ids))
-    )).all()
+    # JOIN InteractionLog with Learner to get student_group
+    stmt = select(InteractionLog, Learner.student_group).join(
+        Learner, InteractionLog.learner_id == Learner.id
+    ).where(InteractionLog.item_id.in_(task_ids))
     
-    # Группируем по learner_id и считаем статистику
-    # Для простоты вернем заглушку с группами
-    groups_data = defaultdict(lambda: {"total": 0, "passed": 0, "scores": [], "students": set()})
+    results = (await session.exec(stmt)).all()
     
-    for inter in interactions:
-        # Пока используем learner_id как временное решение
-        # В реальной системе нужно делать join с таблицей learner
-        groups_data["B23-CS-01"]["total"] += 1
-        groups_data["B23-CS-01"]["students"].add(inter.learner_id)
-        if inter.score is not None:
-            groups_data["B23-CS-01"]["scores"].append(inter.score)
-            if inter.score >= 75:
-                groups_data["B23-CS-01"]["passed"] += 1
+    # Group by student_group
+    groups_data = defaultdict(lambda: {"scores": [], "passed": 0, "students": set()})
+    
+    for interaction, student_group in results:
+        groups_data[student_group]["students"].add(interaction.learner_id)
+        if interaction.score is not None:
+            groups_data[student_group]["scores"].append(interaction.score)
+            if interaction.score >= 75:
+                groups_data[student_group]["passed"] += 1
     
     result = []
     for group_name in sorted(groups_data.keys()):
         data = groups_data[group_name]
+        total = len(data["scores"])
+        passed = data["passed"]
         avg_score = sum(data["scores"]) / len(data["scores"]) if data["scores"] else 0.0
-        pass_rate = (data["passed"] / data["total"] * 100) if data["total"] > 0 else 0.0
+        pass_rate = (passed / total * 100) if total > 0 else 0.0
+        
         result.append({
             "group": group_name,
             "avg_score": round(avg_score, 1),
