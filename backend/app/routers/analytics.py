@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends
+from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
@@ -20,13 +21,12 @@ async def get_scores_histogram(
     session: AsyncSession = Depends(get_session),
 ):
     """Get distribution of scores in four buckets."""
-    # Transform "lab-04" → "Lab 04"
     lab_number = lab.split("-")[1]
     lab_title = f"Lab {lab_number.upper()}"
     
     # Find the lab item
     lab_item = (await session.exec(
-        Item.where(Item.title.contains(lab_title))
+        select(Item).where(col(Item.title).contains(lab_title))
     )).first()
     
     if not lab_item:
@@ -35,13 +35,13 @@ async def get_scores_histogram(
     
     # Find all task items that belong to this lab
     tasks = (await session.exec(
-        Item.where(Item.parent_id == lab_item.id)
+        select(Item).where(Item.parent_id == lab_item.id)
     )).all()
     task_ids = [t.id for t in tasks]
     
     # Query interactions for these tasks that have a score
     interactions = (await session.exec(
-        InteractionLog.where(InteractionLog.task_id.in_(task_ids))
+        select(InteractionLog).where(InteractionLog.task_id.in_(task_ids))
     )).all()
     
     # Filter interactions with scores
@@ -68,13 +68,12 @@ async def get_pass_rates(
     session: AsyncSession = Depends(get_session),
 ):
     """Get pass rates for each task in the lab."""
-    # Transform "lab-04" → "Lab 04"
     lab_number = lab.split("-")[1]
     lab_title = f"Lab {lab_number.upper()}"
     
     # Find the lab item
     lab_item = (await session.exec(
-        Item.where(Item.title.contains(lab_title))
+        select(Item).where(col(Item.title).contains(lab_title))
     )).first()
     
     if not lab_item:
@@ -82,14 +81,14 @@ async def get_pass_rates(
     
     # Find all task items that belong to this lab
     tasks = (await session.exec(
-        Item.where(Item.parent_id == lab_item.id)
+        select(Item).where(Item.parent_id == lab_item.id)
     )).all()
     
     result = []
     for task in tasks:
         # Get all interactions for this task
         interactions = (await session.exec(
-            InteractionLog.where(InteractionLog.task_id == task.id)
+            select(InteractionLog).where(InteractionLog.task_id == task.id)
         )).all()
         
         total = len(interactions)
@@ -111,13 +110,12 @@ async def get_timeline(
     session: AsyncSession = Depends(get_session),
 ):
     """Get timeline of submissions."""
-    # Transform "lab-04" → "Lab 04"
     lab_number = lab.split("-")[1]
     lab_title = f"Lab {lab_number.upper()}"
     
     # Find the lab item
     lab_item = (await session.exec(
-        Item.where(Item.title.contains(lab_title))
+        select(Item).where(col(Item.title).contains(lab_title))
     )).first()
     
     if not lab_item:
@@ -125,13 +123,13 @@ async def get_timeline(
     
     # Find all task items that belong to this lab
     tasks = (await session.exec(
-        Item.where(Item.parent_id == lab_item.id)
+        select(Item).where(Item.parent_id == lab_item.id)
     )).all()
     task_ids = [t.id for t in tasks]
     
     # Query interactions for these tasks
     interactions = (await session.exec(
-        InteractionLog.where(InteractionLog.task_id.in_(task_ids))
+        select(InteractionLog).where(InteractionLog.task_id.in_(task_ids))
     )).all()
     
     # Group by date
@@ -162,13 +160,12 @@ async def get_groups(
     session: AsyncSession = Depends(get_session),
 ):
     """Get statistics grouped by group_id."""
-    # Transform "lab-04" → "Lab 04"
     lab_number = lab.split("-")[1]
     lab_title = f"Lab {lab_number.upper()}"
     
     # Find the lab item
     lab_item = (await session.exec(
-        Item.where(Item.title.contains(lab_title))
+        select(Item).where(col(Item.title).contains(lab_title))
     )).first()
     
     if not lab_item:
@@ -176,13 +173,13 @@ async def get_groups(
     
     # Find all task items that belong to this lab
     tasks = (await session.exec(
-        Item.where(Item.parent_id == lab_item.id)
+        select(Item).where(Item.parent_id == lab_item.id)
     )).all()
     task_ids = [t.id for t in tasks]
     
     # Query interactions for these tasks
     interactions = (await session.exec(
-        InteractionLog.where(InteractionLog.task_id.in_(task_ids))
+        select(InteractionLog).where(InteractionLog.task_id.in_(task_ids))
     )).all()
     
     # Group by group_id
