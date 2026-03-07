@@ -2,13 +2,14 @@
 
 from collections import defaultdict
 from datetime import datetime
+from typing import List
 
 from fastapi import APIRouter, Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
-from app.models.item import Item
 from app.models.interaction import InteractionLog
+from app.models.item import Item
 
 router = APIRouter()
 
