@@ -9,7 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
 from app.models.interaction import InteractionLog
-from app.models.item import Item
+from app.models.item import ItemRecord as Item
 
 router = APIRouter()
 
