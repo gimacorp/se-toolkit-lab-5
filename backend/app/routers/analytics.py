@@ -1,90 +1,205 @@
-"""Router for analytics endpoints.
+"""Router for analytics endpoints."""
 
-Each endpoint performs SQL aggregation queries on the interaction data
-populated by the ETL pipeline. All endpoints require a `lab` query
-parameter to filter results by lab (e.g., "lab-01").
-"""
+from collections import defaultdict
+from datetime import datetime
+from typing import List
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
+from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
+from app.models.interaction import InteractionLog
+from app.models.item import ItemRecord as Item
+from app.models.learner import Learner
 
 router = APIRouter()
 
 
 @router.get("/scores")
-async def get_scores(
-    lab: str = Query(..., description="Lab identifier, e.g. 'lab-01'"),
+async def get_scores_histogram(
+    lab: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Score distribution histogram for a given lab.
-
-    TODO: Implement this endpoint.
-    - Find the lab item by matching title (e.g. "lab-04" → title contains "Lab 04")
-    - Find all tasks that belong to this lab (parent_id = lab.id)
-    - Query interactions for these items that have a score
-    - Group scores into buckets: "0-25", "26-50", "51-75", "76-100"
-      using CASE WHEN expressions
-    - Return a JSON array:
-      [{"bucket": "0-25", "count": 12}, {"bucket": "26-50", "count": 8}, ...]
-    - Always return all four buckets, even if count is 0
-    """
-    raise NotImplementedError
+    """Get distribution of scores in four buckets."""
+    lab_number = lab.split("-")[1]
+    lab_title = f"Lab {lab_number.upper()}"
+    
+    lab_item = (await session.exec(
+        select(Item).where(col(Item.title).contains(lab_title))
+    )).first()
+    
+    if not lab_item:
+        return [{"bucket": "0-25", "count": 0}, {"bucket": "26-50", "count": 0}, 
+                {"bucket": "51-75", "count": 0}, {"bucket": "76-100", "count": 0}]
+    
+    tasks = (await session.exec(
+        select(Item).where(Item.parent_id == lab_item.id)
+    )).all()
+    task_ids = [t.id for t in tasks]
+    
+    interactions = (await session.exec(
+        select(InteractionLog).where(InteractionLog.item_id.in_(task_ids))
+    )).all()
+    
+    scored_interactions = [i for i in interactions if i.score is not None]
+    
+    buckets = {"0-25": 0, "26-50": 0, "51-75": 0, "76-100": 0}
+    for inter in scored_interactions:
+        if inter.score <= 25:
+            buckets["0-25"] += 1
+        elif inter.score <= 50:
+            buckets["26-50"] += 1
+        elif inter.score <= 75:
+            buckets["51-75"] += 1
+        else:
+            buckets["76-100"] += 1
+    
+    return [{"bucket": k, "count": v} for k, v in buckets.items()]
 
 
 @router.get("/pass-rates")
 async def get_pass_rates(
-    lab: str = Query(..., description="Lab identifier, e.g. 'lab-01'"),
+    lab: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Per-task pass rates for a given lab.
-
-    TODO: Implement this endpoint.
-    - Find the lab item and its child task items
-    - For each task, compute:
-      - avg_score: average of interaction scores (round to 1 decimal)
-      - attempts: total number of interactions
-    - Return a JSON array:
-      [{"task": "Repository Setup", "avg_score": 92.3, "attempts": 150}, ...]
-    - Order by task title
-    """
-    raise NotImplementedError
+    """Get pass rates for each task in the lab."""
+    lab_number = lab.split("-")[1]
+    lab_title = f"Lab {lab_number.upper()}"
+    
+    lab_item = (await session.exec(
+        select(Item).where(col(Item.title).contains(lab_title))
+    )).first()
+    
+    if not lab_item:
+        return []
+    
+    tasks = (await session.exec(
+        select(Item).where(Item.parent_id == lab_item.id)
+    )).all()
+    
+    result = []
+    for task in tasks:
+        interactions = (await session.exec(
+            select(InteractionLog).where(InteractionLog.item_id == task.id)
+        )).all()
+        
+        total = len(interactions)
+        passed = len([i for i in interactions if i.score is not None and i.score >= 75])
+        
+        pass_rate = (passed / total * 100) if total > 0 else 0.0
+        
+        scored_interactions = [i for i in interactions if i.score is not None]
+        avg_score = sum(i.score for i in scored_interactions) / len(scored_interactions) if scored_interactions else 0.0
+        
+        result.append({
+            "task": task.title,
+            "avg_score": round(avg_score, 1),
+            "attempts": total
+        })
+    
+    return result
 
 
 @router.get("/timeline")
 async def get_timeline(
-    lab: str = Query(..., description="Lab identifier, e.g. 'lab-01'"),
+    lab: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Submissions per day for a given lab.
-
-    TODO: Implement this endpoint.
-    - Find the lab item and its child task items
-    - Group interactions by date (use func.date(created_at))
-    - Count the number of submissions per day
-    - Return a JSON array:
-      [{"date": "2026-02-28", "submissions": 45}, ...]
-    - Order by date ascending
-    """
-    raise NotImplementedError
+    """Get timeline of submissions."""
+    lab_number = lab.split("-")[1]
+    lab_title = f"Lab {lab_number.upper()}"
+    
+    lab_item = (await session.exec(
+        select(Item).where(col(Item.title).contains(lab_title))
+    )).first()
+    
+    if not lab_item:
+        return []
+    
+    tasks = (await session.exec(
+        select(Item).where(Item.parent_id == lab_item.id)
+    )).all()
+    task_ids = [t.id for t in tasks]
+    
+    interactions = (await session.exec(
+        select(InteractionLog).where(InteractionLog.item_id.in_(task_ids))
+    )).all()
+    
+    timeline = defaultdict(lambda: {"submissions": 0, "passed": 0})
+    for inter in interactions:
+        date_str = inter.created_at.strftime("%Y-%m-%d")
+        timeline[date_str]["submissions"] += 1
+        if inter.score is not None and inter.score >= 75:
+            timeline[date_str]["passed"] += 1
+    
+    result = []
+    for date_str in sorted(timeline.keys()):
+        data = timeline[date_str]
+        total = data["submissions"]
+        passed = data["passed"]
+        pass_rate = (passed / total * 100) if total > 0 else 0.0
+        result.append({
+            "date": date_str,
+            "submissions": data["submissions"],
+            "passed": data["passed"],
+            "pass_rate": round(pass_rate, 1)
+        })
+    
+    return result
 
 
 @router.get("/groups")
 async def get_groups(
-    lab: str = Query(..., description="Lab identifier, e.g. 'lab-01'"),
+    lab: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Per-group performance for a given lab.
-
-    TODO: Implement this endpoint.
-    - Find the lab item and its child task items
-    - Join interactions with learners to get student_group
-    - For each group, compute:
-      - avg_score: average score (round to 1 decimal)
-      - students: count of distinct learners
-    - Return a JSON array:
-      [{"group": "B23-CS-01", "avg_score": 78.5, "students": 25}, ...]
-    - Order by group name
-    """
-    raise NotImplementedError
+    """Get statistics grouped by group_id."""
+    lab_number = lab.split("-")[1]
+    lab_title = f"Lab {lab_number.upper()}"
+    
+    lab_item = (await session.exec(
+        select(Item).where(col(Item.title).contains(lab_title))
+    )).first()
+    
+    if not lab_item:
+        return []
+    
+    tasks = (await session.exec(
+        select(Item).where(Item.parent_id == lab_item.id)
+    )).all()
+    task_ids = [t.id for t in tasks]
+    
+    # JOIN InteractionLog with Learner to get student_group
+    stmt = select(InteractionLog, Learner.student_group).join(
+        Learner, InteractionLog.learner_id == Learner.id
+    ).where(InteractionLog.item_id.in_(task_ids))
+    
+    results = (await session.exec(stmt)).all()
+    
+    # Group by student_group
+    groups_data = defaultdict(lambda: {"scores": [], "passed": 0, "students": set()})
+    
+    for interaction, student_group in results:
+        groups_data[student_group]["students"].add(interaction.learner_id)
+        if interaction.score is not None:
+            groups_data[student_group]["scores"].append(interaction.score)
+            if interaction.score >= 75:
+                groups_data[student_group]["passed"] += 1
+    
+    result = []
+    for group_name in sorted(groups_data.keys()):
+        data = groups_data[group_name]
+        total = len(data["scores"])
+        passed = data["passed"]
+        avg_score = sum(data["scores"]) / len(data["scores"]) if data["scores"] else 0.0
+        pass_rate = (passed / total * 100) if total > 0 else 0.0
+        
+        result.append({
+            "group": group_name,
+            "avg_score": round(avg_score, 1),
+            "students": len(data["students"]),
+            "pass_rate": round(pass_rate, 1)
+        })
+    
+    return result
